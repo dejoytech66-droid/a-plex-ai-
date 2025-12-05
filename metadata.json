@@ -1,0 +1,7 @@
+{
+  "name": "A-Plex AI",
+  "description": "A powerful, ChatGPT-like AI chat application powered by Google Gemini 3 Pro, featuring advanced coding capabilities, voice input, markdown support, and persistent conversation history.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
