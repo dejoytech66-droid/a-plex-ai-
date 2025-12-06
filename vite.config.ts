@@ -10,7 +10,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     define: {
       // Expose API_KEY to the client-side code safely
-      'process.env.API_KEY': JSON.stringify(env.API_KEY || process.env.API_KEY || '')
+      // We check GEMINI_API_KEY first, then API_KEY
+      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY || env.API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY || '')
     }
   };
 });

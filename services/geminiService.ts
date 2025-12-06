@@ -15,7 +15,7 @@ const getApiKey = () => {
   // Fallback to Vite standard import.meta.env
   if (!key) {
     try {
-        key = (import.meta as any).env?.VITE_API_KEY || '';
+        key = (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.VITE_API_KEY || '';
     } catch (e) { /* ignore */ }
   }
   return key;
@@ -26,7 +26,7 @@ const API_KEY = getApiKey();
 // Initialize Gemini Client
 const getClient = () => {
     if (!API_KEY) {
-        throw new Error("API Key is missing. Please set API_KEY in your environment variables.");
+        throw new Error("API Key is missing. Please set GEMINI_API_KEY or API_KEY in your environment variables.");
     }
     return new GoogleGenAI({ apiKey: API_KEY });
 };
