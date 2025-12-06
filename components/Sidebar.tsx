@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Plus, MessageSquare, Trash2, Moon, Sun, Download, LogOut, User, FolderKanban, Settings, Users, MessageCircle } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Moon, Sun, Download, LogOut, User, FolderKanban, Settings, Users, MessageCircle, Key } from 'lucide-react';
 import { ChatSession, Theme } from '../types';
 
 interface SidebarProps {
@@ -21,6 +21,7 @@ interface SidebarProps {
   currentView: 'chat' | 'projects';
   onChangeView: (view: 'chat' | 'projects') => void;
   onOpenSettings: () => void;
+  onOpenKeyModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -40,7 +41,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSignOut,
   currentView,
   onChangeView,
-  onOpenSettings
+  onOpenSettings,
+  onOpenKeyModal
 }) => {
   return (
     <>
@@ -200,6 +202,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Settings className="w-4 h-4" />
             Settings & Privacy
           </button>
+          
+          {onOpenKeyModal && (
+            <button 
+                onClick={onOpenKeyModal}
+                className="flex items-center gap-3 w-full px-3 py-3 rounded-md hover:bg-white/10 text-sm text-gray-100 transition-colors text-left"
+            >
+                <Key className="w-4 h-4" />
+                Update API Key
+            </button>
+          )}
 
           <button 
              onClick={onToggleTheme}

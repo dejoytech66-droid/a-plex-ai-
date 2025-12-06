@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Menu, Loader2, Users } from 'lucide-react';
-import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 
 import { Sidebar } from './components/Sidebar';
 import { ChatInput } from './components/ChatInput';
@@ -13,7 +12,7 @@ import { CreateGroupModal } from './components/CreateGroupModal';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ChatSession, Message, Theme, Project, UserSettings, Attachment, GroupMetadata } from './types';
 import { streamGeminiResponse, generateChatTitle, generateImage, getStoredKey } from './services/geminiService';
-import { auth } from './services/firebase';
+import { auth, onAuthStateChanged, User, signOut } from './services/firebase';
 
 const App: React.FC = () => {
   // --- Auth State ---
@@ -285,7 +284,7 @@ const App: React.FC = () => {
           }
           return s;
       }));
-  }
+  };
 
   const handleDeleteSession = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -366,7 +365,7 @@ const App: React.FC = () => {
                 timestamp: Date.now()
             };
             addMessageToSession(currentSessionId, errorMsg);
-            if (error.message.includes("API Key is missing")) {
+            if (error.message.includes("API Key is missing") || error.message === "API_KEY_INVALID") {
                 setIsKeyModalOpen(true);
             }
         } finally {
@@ -409,9 +408,9 @@ const App: React.FC = () => {
         const stream = streamGeminiResponse(history, text, groupContext);
 
         for await (const chunk of stream) {
-            if (chunk === 'API_KEY_MISSING') {
+            if (chunk === 'API_KEY_MISSING' || chunk === 'API_KEY_INVALID') {
                 setIsKeyModalOpen(true);
-                throw new Error("API Key Missing");
+                throw new Error("API Key Invalid"); // Throw to stop stream loop
             }
             fullResponse += chunk;
             updateLastMessage(currentSessionId, fullResponse);
@@ -422,10 +421,11 @@ const App: React.FC = () => {
         }
 
     } catch (error: any) {
-        if (error.message !== "API Key Missing") {
-            updateLastMessage(currentSessionId, "Error: " + error.message);
+        // If it was the specific invalid key error we just threw, handle gracefully
+        if (error.message === "API Key Invalid") {
+             updateLastMessage(currentSessionId, "⚠️ Authentication Failed. Please enter a valid API Key in the popup.");
         } else {
-             updateLastMessage(currentSessionId, "Please enter your API Key to continue.");
+             updateLastMessage(currentSessionId, "Error: " + error.message);
         }
         
         setSessions(prev => prev.map(s => {
@@ -512,8 +512,7 @@ const App: React.FC = () => {
         isOpen={isKeyModalOpen} 
         onClose={() => setIsKeyModalOpen(false)}
         onSuccess={() => {
-            // Re-render or just let the user try again
-            alert("API Key saved! Please try your request again.");
+            // alert("API Key saved! Please try your request again.");
         }}
       />
 
@@ -536,6 +535,7 @@ const App: React.FC = () => {
         currentView={currentView}
         onChangeView={setCurrentView}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenKeyModal={() => setIsKeyModalOpen(true)} 
       />
 
       {/* Main Content */}

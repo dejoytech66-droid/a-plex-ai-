@@ -14,17 +14,20 @@ export const removeStoredKey = () => localStorage.removeItem(STORAGE_KEY);
 // Helper to get client safely
 const getClient = () => {
   // 1. Try Environment Variable (from Vite/Vercel)
+  // process.env.API_KEY is replaced by Vite at build time
   let apiKey = process.env.API_KEY;
 
   // 2. If Env var is missing or placeholder, try Local Storage (User entered)
-  if (!apiKey || apiKey === "YOUR_API_KEY_HERE" || apiKey.includes("API_KEY")) {
+  // We prioritize the stored key if the env key looks generic or empty
+  if (!apiKey || apiKey === "YOUR_API_KEY_HERE" || apiKey.includes("API_KEY") || apiKey === '""') {
       const userKey = getStoredKey();
       if (userKey) {
           apiKey = userKey;
       }
   }
 
-  if (!apiKey || apiKey === "YOUR_API_KEY_HERE") {
+  // Final check
+  if (!apiKey || apiKey === "YOUR_API_KEY_HERE" || apiKey === '""') {
     throw new Error("API_KEY_MISSING");
   }
   
@@ -137,9 +140,10 @@ export async function* streamGeminiResponse(
   } catch (error: any) {
     console.error("Gemini API Error:", error);
     if (error.message === "API_KEY_MISSING") {
-        yield "API_KEY_MISSING"; // Specific signal for UI to handle
-    } else if (error.message.includes("API key")) {
-         yield "⚠️ **Authentication Error**: The API Key is invalid. Please check your settings.";
+        yield "API_KEY_MISSING"; 
+    } else if (error.message.includes("API key") || error.message.includes("403") || error.status === 403) {
+         // Return specific signal for invalid key so UI can prompt user
+         yield "API_KEY_INVALID";
     } else {
         yield "⚠️ **Error**: " + (error.message || "Failed to generate response.");
     }
@@ -188,6 +192,9 @@ export async function generateImage(prompt: string): Promise<string> {
     console.error("Image Gen Error:", error);
     if (error.message === "API_KEY_MISSING") {
         throw new Error("API Key is missing. Please set it in Settings.");
+    }
+    if (error.message.includes("API key") || error.message.includes("403")) {
+        throw new Error("API_KEY_INVALID");
     }
     throw new Error(error.message || "Failed to generate image.");
   }
