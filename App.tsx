@@ -1,14 +1,18 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Menu, Loader2 } from 'lucide-react';
+import { Menu, Loader2, Users } from 'lucide-react';
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
 
 import { Sidebar } from './components/Sidebar';
 import { ChatInput } from './components/ChatInput';
 import { MessageBubble } from './components/MessageBubble';
 import { AuthPage } from './components/AuthPage';
-import { ChatSession, Message, Theme } from './types';
-import { streamGeminiResponse, generateChatTitle } from './services/geminiService';
+import { ProjectDashboard } from './components/ProjectDashboard';
+import { PrivacySettingsModal } from './components/PrivacySettingsModal';
+import { CreateGroupModal } from './components/CreateGroupModal';
+import { ChatSession, Message, Theme, Project, UserSettings, Attachment, GroupMetadata } from './types';
+import { streamGeminiResponse, generateChatTitle, generateImage } from './services/geminiService';
 import { auth } from './services/firebase';
 
 const App: React.FC = () => {
@@ -17,11 +21,28 @@ const App: React.FC = () => {
   const [authLoading, setAuthLoading] = useState(true);
 
   // --- App State ---
+  const [currentView, setCurrentView] = useState<'chat' | 'projects'>('chat');
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  
+  // Default Settings
+  const [userSettings, setUserSettings] = useState<UserSettings>({
+      privacy: {
+          defaultPostVisibility: 'Friends',
+          defaultProjectVisibility: 'Private',
+          defaultFileVisibility: 'Private',
+          profileVisibility: 'Public',
+          allowTagging: true,
+          showActivityStatus: true
+      }
+  });
+
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
         return 'dark';
@@ -60,13 +81,14 @@ const App: React.FC = () => {
 
   // --- Effects ---
 
-  // Load Sessions for specific user
+  // Load Data for specific user
   useEffect(() => {
     if (user) {
-        const savedKey = `aplex_sessions_${user.uid}`;
-        const saved = localStorage.getItem(savedKey);
-        if (saved) {
-            const loadedSessions = JSON.parse(saved);
+        // Sessions
+        const savedSessionKey = `aplex_sessions_${user.uid}`;
+        const savedSessions = localStorage.getItem(savedSessionKey);
+        if (savedSessions) {
+            const loadedSessions = JSON.parse(savedSessions);
             setSessions(loadedSessions);
             if (loadedSessions.length > 0) {
                 setCurrentSessionId(loadedSessions[0].id);
@@ -75,8 +97,26 @@ const App: React.FC = () => {
             setSessions([]);
             setCurrentSessionId(null);
         }
+
+        // Projects
+        const savedProjectsKey = `aplex_projects_${user.uid}`;
+        const savedProjects = localStorage.getItem(savedProjectsKey);
+        if (savedProjects) {
+            setProjects(JSON.parse(savedProjects));
+        } else {
+            setProjects([]);
+        }
+
+        // Settings
+        const savedSettingsKey = `aplex_settings_${user.uid}`;
+        const savedSettings = localStorage.getItem(savedSettingsKey);
+        if (savedSettings) {
+            setUserSettings(JSON.parse(savedSettings));
+        }
+
     } else {
         setSessions([]);
+        setProjects([]);
         setCurrentSessionId(null);
     }
   }, [user]);
@@ -89,12 +129,27 @@ const App: React.FC = () => {
     }
   }, [sessions, user]);
 
+  // Persist Projects
+  useEffect(() => {
+    if (user) {
+        const savedKey = `aplex_projects_${user.uid}`;
+        localStorage.setItem(savedKey, JSON.stringify(projects));
+    }
+  }, [projects, user]);
+
+  // Persist Settings
+  useEffect(() => {
+    if (user) {
+        const savedKey = `aplex_settings_${user.uid}`;
+        localStorage.setItem(savedKey, JSON.stringify(userSettings));
+    }
+  }, [userSettings, user]);
+
   // Initialize new chat if needed
   useEffect(() => {
       if (!authLoading && user && sessions.length === 0 && !currentSessionId) {
           createNewSession();
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading, sessions.length, currentSessionId]);
 
   // Theme
@@ -109,7 +164,7 @@ const App: React.FC = () => {
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+  }, [messages, isLoading, currentView]);
 
 
   // --- Voice / TTS Functions ---
@@ -123,30 +178,19 @@ const App: React.FC = () => {
 
   const speakText = (text: string) => {
     if (!speechSynthesisRef.current) return;
-    
-    // Cancel existing
     stopSpeaking();
-
-    // Create new utterance
-    // Strip markdown chars for better reading (basic regex)
     const cleanText = text.replace(/[*#`]/g, ''); 
     const utterance = new SpeechSynthesisUtterance(cleanText);
     currentUtteranceRef.current = utterance;
-
-    // Get voices and try to pick a decent one
     const voices = speechSynthesisRef.current.getVoices();
-    // Prefer Google US English or Microsoft generic if available
     const preferredVoice = voices.find(v => v.name.includes('Google') && v.lang.includes('en-US')) 
                         || voices.find(v => v.lang.includes('en-US'));
     if (preferredVoice) utterance.voice = preferredVoice;
-
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
-
     utterance.onstart = () => setIsSpeaking(true);
     utterance.onend = () => setIsSpeaking(false);
     utterance.onerror = () => setIsSpeaking(false);
-
     speechSynthesisRef.current.speak(utterance);
   };
 
@@ -158,6 +202,7 @@ const App: React.FC = () => {
     try {
         await signOut(auth);
         setSessions([]);
+        setProjects([]);
         setCurrentSessionId(null);
     } catch (error) {
         console.error("Error signing out", error);
@@ -168,6 +213,7 @@ const App: React.FC = () => {
     stopSpeaking();
     const newSession: ChatSession = {
       id: uuidv4(),
+      type: 'direct',
       title: 'New Chat',
       messages: [],
       createdAt: Date.now(),
@@ -175,6 +221,23 @@ const App: React.FC = () => {
     };
     setSessions(prev => [newSession, ...prev]);
     setCurrentSessionId(newSession.id);
+    setCurrentView('chat'); 
+  };
+
+  const handleCreateGroup = (metadata: GroupMetadata) => {
+      const newGroupSession: ChatSession = {
+          id: uuidv4(),
+          type: 'group',
+          title: metadata.name, // Group title
+          groupMetadata: metadata,
+          messages: [],
+          createdAt: Date.now(),
+          lastModified: Date.now()
+      };
+      setSessions(prev => [newGroupSession, ...prev]);
+      setCurrentSessionId(newGroupSession.id);
+      setIsCreateGroupOpen(false);
+      setCurrentView('chat');
   };
 
   const updateSession = (id: string, updates: Partial<ChatSession>) => {
@@ -240,10 +303,9 @@ const App: React.FC = () => {
       URL.revokeObjectURL(url);
   };
 
-  const handleSendMessage = async (text: string, mode: 'text' | 'voice' = 'text') => {
+  const handleSendMessage = async (text: string, mode: 'text' | 'voice' = 'text', attachments: Attachment[] = []) => {
     if (!currentSessionId) return;
     
-    // Stop any current speech when sending new message
     stopSpeaking();
 
     // 1. Add User Message
@@ -251,41 +313,86 @@ const App: React.FC = () => {
       id: uuidv4(),
       role: 'user',
       text,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      attachments: attachments
     };
     addMessageToSession(currentSessionId, userMsg);
     setIsLoading(true);
 
-    // 2. Generate Title if it's the first message
+    // 2. Check for Image Generation Command
+    const lowerText = text.toLowerCase();
+    const isImageRequest = 
+        lowerText.includes("generate image") || 
+        lowerText.includes("create image") || 
+        lowerText.includes("draw") || 
+        lowerText.includes("ছবি") || 
+        lowerText.includes("আঁকো") || 
+        lowerText.includes("banao");
+
+    if (isImageRequest) {
+        try {
+            const base64Image = await generateImage(text);
+            const aiMsg: Message = {
+                id: uuidv4(),
+                role: 'model',
+                text: "Here is the image you requested:",
+                imageUrl: `data:image/jpeg;base64,${base64Image}`,
+                timestamp: Date.now()
+            };
+            addMessageToSession(currentSessionId, aiMsg);
+        } catch (error: any) {
+            const errorMsg: Message = {
+                id: uuidv4(),
+                role: 'model',
+                text: `I couldn't generate the image. ${error.message}`,
+                isError: true,
+                timestamp: Date.now()
+            };
+            addMessageToSession(currentSessionId, errorMsg);
+        } finally {
+            setIsLoading(false);
+        }
+        return;
+    }
+
+    // 3. Normal Text Chat
+    
+    // Generate Title if needed
     const session = sessions.find(s => s.id === currentSessionId);
-    if (session && session.messages.length === 0) {
+    if (session && session.messages.length === 0 && session.type === 'direct') {
         generateChatTitle(text).then(title => {
             updateSession(currentSessionId, { title });
         });
     }
 
-    // 3. Prepare AI Message Placeholder
+    // Prepare AI Message Placeholder
     const aiMsgId = uuidv4();
     const aiMsg: Message = {
       id: aiMsgId,
       role: 'model',
-      text: '', // Start empty
+      text: '', 
       timestamp: Date.now()
     };
     addMessageToSession(currentSessionId, aiMsg);
 
-    // 4. Stream Response
+    // Stream Response
     let fullResponse = '';
     try {
         const history = sessions.find(s => s.id === currentSessionId)?.messages || [];
-        const stream = streamGeminiResponse(history, text);
+        
+        // Construct Group Context string if applicable
+        let groupContext = '';
+        if (session?.type === 'group' && session.groupMetadata) {
+            groupContext = `Group Name: ${session.groupMetadata.name}\nMembers: ${session.groupMetadata.members.join(', ')}\nDescription: ${session.groupMetadata.description || 'None'}`;
+        }
+
+        const stream = streamGeminiResponse(history, text, groupContext);
 
         for await (const chunk of stream) {
             fullResponse += chunk;
             updateLastMessage(currentSessionId, fullResponse);
         }
 
-        // 5. Handle Text-to-Speech if Voice Mode
         if (mode === 'voice' && fullResponse) {
              speakText(fullResponse);
         }
@@ -312,6 +419,35 @@ const App: React.FC = () => {
       stopSpeaking();
   };
 
+  const handlePinMessage = (msgId: string) => {
+      if (!currentSessionId) return;
+      setSessions(prev => prev.map(s => {
+          if (s.id === currentSessionId) {
+              return {
+                  ...s,
+                  messages: s.messages.map(m => m.id === msgId ? { ...m, pinned: !m.pinned } : m)
+              };
+          }
+          return s;
+      }));
+  };
+
+  // --- Project Handlers ---
+  const handleAddProject = (newProject: Project) => {
+      setProjects(prev => [newProject, ...prev]);
+  };
+
+  const handleUpdateProject = (id: string, updates: Partial<Project>) => {
+      setProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  };
+
+  const handleDeleteProject = (id: string) => {
+      if (confirm('Are you sure you want to delete this project?')) {
+        setProjects(prev => prev.filter(p => p.id !== id));
+      }
+  };
+
+
   // --- Render ---
 
   if (authLoading) {
@@ -329,6 +465,20 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen w-full overflow-hidden bg-white dark:bg-gray-800">
       
+      {/* Modals */}
+      <PrivacySettingsModal 
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={userSettings}
+        onUpdateSettings={setUserSettings}
+      />
+      
+      <CreateGroupModal 
+        isOpen={isCreateGroupOpen}
+        onClose={() => setIsCreateGroupOpen(false)}
+        onCreate={handleCreateGroup}
+      />
+
       {/* Sidebar */}
       <Sidebar 
         isOpen={isSidebarOpen}
@@ -336,7 +486,8 @@ const App: React.FC = () => {
         sessions={sessions}
         currentSessionId={currentSessionId}
         onNewChat={createNewSession}
-        onSelectSession={(id) => { stopSpeaking(); setCurrentSessionId(id); }}
+        onNewGroup={() => setIsCreateGroupOpen(true)}
+        onSelectSession={(id) => { stopSpeaking(); setCurrentSessionId(id); setCurrentView('chat'); }}
         onDeleteSession={handleDeleteSession}
         onClearAll={handleClearAll}
         theme={theme}
@@ -344,6 +495,9 @@ const App: React.FC = () => {
         onDownloadChat={handleDownloadChat}
         userEmail={user.email}
         onSignOut={handleSignOut}
+        currentView={currentView}
+        onChangeView={setCurrentView}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       {/* Main Content */}
@@ -357,53 +511,79 @@ const App: React.FC = () => {
           >
             <Menu className="w-6 h-6" />
           </button>
-          <span className="ml-2 font-medium text-gray-700 dark:text-gray-200 truncate">
-             {currentSession?.title || 'A-Plex AI'}
+          <span className="ml-2 font-medium text-gray-700 dark:text-gray-200 truncate flex items-center gap-2">
+             {currentView === 'chat' && currentSession?.type === 'group' && <Users className="w-4 h-4 text-purple-500" />}
+             {currentView === 'chat' ? (currentSession?.title || 'A-Plex AI') : 'Projects'}
           </span>
         </div>
 
-        {/* Chat Area */}
-        <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 bg-white dark:bg-gray-800">
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-8 opacity-80">
-                <div className="bg-white dark:bg-gray-700 p-4 rounded-full shadow-lg mb-6">
-                    <div className="w-12 h-12 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
-                        <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
+        {/* View Switcher */}
+        {currentView === 'chat' ? (
+            <>
+                {/* Chat Area */}
+                <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 bg-white dark:bg-gray-800">
+                {messages.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center p-8 opacity-80">
+                        <div className="bg-white dark:bg-gray-700 p-4 rounded-full shadow-lg mb-6">
+                            {currentSession?.type === 'group' ? (
+                                <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
+                                    <Users className="w-8 h-8 text-purple-600" />
+                                </div>
+                            ) : (
+                                <div className="w-12 h-12 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
+                                    <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                    </svg>
+                                </div>
+                            )}
+                        </div>
+                        <h1 className="text-4xl font-bold mb-2 text-gray-800 dark:text-white">
+                            {currentSession?.type === 'group' ? currentSession.title : 'A-Plex AI'}
+                        </h1>
+                        <p className="text-gray-500 dark:text-gray-400 max-w-md">
+                            {currentSession?.type === 'group' 
+                                ? `Group Members: ${currentSession.groupMetadata?.members.length} participants` 
+                                : 'Your intelligent companion. Ask me anything, generate ideas, or translate languages.'
+                            }
+                        </p>
                     </div>
+                ) : (
+                    <div className="flex flex-col pb-32 pt-4">
+                    {messages.map((msg) => (
+                        <MessageBubble 
+                            key={msg.id} 
+                            message={msg} 
+                            onSpeak={speakText} 
+                            isSpeaking={isSpeaking}
+                            onStopSpeak={stopSpeaking}
+                            onPin={handlePinMessage}
+                        />
+                    ))}
+                    <div ref={messagesEndRef} />
+                    </div>
+                )}
                 </div>
-                <h1 className="text-4xl font-bold mb-2 text-gray-800 dark:text-white">A-Plex AI</h1>
-                <p className="text-gray-500 dark:text-gray-400 max-w-md">
-                    Your intelligent companion. Ask me anything, generate ideas, or translate languages.
-                </p>
-            </div>
-          ) : (
-            <div className="flex flex-col pb-32 pt-4">
-              {messages.map((msg) => (
-                <MessageBubble 
-                    key={msg.id} 
-                    message={msg} 
-                    onSpeak={speakText} 
-                    isSpeaking={isSpeaking}
-                    onStopSpeak={stopSpeaking}
-                />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
 
-        {/* Input Area */}
-        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white via-white to-transparent dark:from-gray-800 dark:via-gray-800 pt-10 pb-2 px-2">
-           <ChatInput 
-             onSend={handleSendMessage} 
-             isLoading={isLoading}
-             onStop={handleStop}
-             isSpeaking={isSpeaking}
-             onStopSpeaking={stopSpeaking}
-           />
-        </div>
+                {/* Input Area */}
+                <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white via-white to-transparent dark:from-gray-800 dark:via-gray-800 pt-10 pb-2 px-2">
+                <ChatInput 
+                    onSend={handleSendMessage} 
+                    isLoading={isLoading}
+                    onStop={handleStop}
+                    isSpeaking={isSpeaking}
+                    onStopSpeaking={stopSpeaking}
+                />
+                </div>
+            </>
+        ) : (
+            <ProjectDashboard 
+                projects={projects}
+                onAddProject={handleAddProject}
+                onUpdateProject={handleUpdateProject}
+                onDeleteProject={handleDeleteProject}
+                defaultVisibility={userSettings.privacy.defaultProjectVisibility}
+            />
+        )}
 
       </div>
     </div>

@@ -1,8 +1,10 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Mic, MicOff, StopCircle, X } from 'lucide-react';
+import { Send, Mic, MicOff, StopCircle, X, Paperclip, Image as ImageIcon, FileText } from 'lucide-react';
+import { Attachment } from '../types';
 
 interface ChatInputProps {
-  onSend: (text: string, mode: 'text' | 'voice') => void;
+  onSend: (text: string, mode: 'text' | 'voice', attachments?: Attachment[]) => void;
   isLoading: boolean;
   onStop: () => void;
   isSpeaking: boolean;
@@ -18,10 +20,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 }) => {
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
-  // Use ReturnType<typeof setTimeout> to handle both browser (number) and Node (object) environments without implicit NodeJS namespace
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -33,9 +37,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   // Handle Send
   const handleSend = (mode: 'text' | 'voice' = 'text') => {
-    if (!text.trim() || isLoading) return;
-    onSend(text, mode);
+    if ((!text.trim() && attachments.length === 0) || isLoading) return;
+    onSend(text, mode, attachments);
     setText('');
+    setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
@@ -51,18 +56,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
       const recognition = new SpeechRecognition();
-      recognition.continuous = true; // Keep listening until we manually stop or detect silence
+      recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
 
       recognition.onstart = () => {
         setIsListening(true);
-        if (isSpeaking) onStopSpeaking(); // Stop AI from talking if user starts
+        if (isSpeaking) onStopSpeaking();
       };
 
-      recognition.onend = () => {
-        setIsListening(false);
-      };
+      recognition.onend = () => setIsListening(false);
 
       recognition.onerror = (event: any) => {
         console.error("Speech error", event.error);
@@ -70,7 +73,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       };
 
       recognition.onresult = (event: any) => {
-        // Clear existing silence timer on new input
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 
         let finalTranscript = '';
@@ -81,22 +83,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
 
         if (finalTranscript) {
-          setText(prev => {
-             const newVal = prev + (prev ? ' ' : '') + finalTranscript;
-             return newVal;
-          });
-          
-          // Auto-send after 2 seconds of silence if we have final results
+          setText(prev => prev + (prev ? ' ' : '') + finalTranscript);
           silenceTimerRef.current = setTimeout(() => {
              if (recognitionRef.current) recognitionRef.current.stop();
-             // We need to wait a tick for the state to update, or use the value directly.
-             // Since setText is async, we pass the known transcript if needed, but 
-             // for simplicity, the user effect or manual trigger is safer. 
-             // Here we rely on the user manually stopping or this timer stopping the mic.
-             // The actual send happens in the separate useEffect below designed for auto-send logic
-             // or we can just trigger it here if we refactor.
-             
-             // Let's just stop the mic here. The `toggleListening` logic handles the "stop" action.
           }, 2000);
         }
       };
@@ -108,9 +97,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     };
   }, [isSpeaking, onStopSpeaking]);
 
-  // Separate effect to handle "Auto Send" when listening stops naturally and we have text
-  // However, explicit user control is often better. Let's make the stop button send.
-
   const toggleListening = () => {
     if (!recognitionRef.current) {
       alert("Speech recognition not supported in this browser.");
@@ -118,15 +104,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     if (isListening) {
-      // User manually stopped. If there is text, send it as voice message.
       recognitionRef.current.stop();
-      if (text.trim()) {
-        // Small delay to ensure state is settled
-        setTimeout(() => handleSend('voice'), 200);
-      }
+      if (text.trim()) setTimeout(() => handleSend('voice'), 200);
     } else {
-      // Start listening
-      setText(''); // Clear previous text for a fresh voice command
+      setText('');
       recognitionRef.current.start();
     }
   };
@@ -135,6 +116,42 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       if (recognitionRef.current) recognitionRef.current.stop();
       setText('');
       setIsListening(false);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files.length > 0) {
+          const file = e.target.files[0];
+          
+          if (file.size > 2 * 1024 * 1024) {
+             alert("File too large (Max 2MB)");
+             return;
+          }
+
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+              if (ev.target?.result) {
+                  let type: 'image' | 'video' | 'pdf' | 'document' | 'audio' = 'document';
+                  if (file.type.startsWith('image/')) type = 'image';
+                  else if (file.type.startsWith('video/')) type = 'video';
+                  else if (file.type === 'application/pdf') type = 'pdf';
+                  else if (file.type.startsWith('audio/')) type = 'audio';
+
+                  setAttachments(prev => [...prev, {
+                      id: Date.now().toString(),
+                      name: file.name,
+                      type,
+                      url: ev.target!.result as string,
+                      size: (file.size / 1024).toFixed(1) + ' KB'
+                  }]);
+              }
+          };
+          reader.readAsDataURL(file);
+      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeAttachment = (id: string) => {
+      setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
   return (
@@ -154,24 +171,55 @@ export const ChatInput: React.FC<ChatInputProps> = ({
            </div>
            
            <div className="flex items-center gap-2">
-              <button 
-                onClick={cancelListening}
-                className="p-2 rounded-full hover:bg-white/20 text-white transition-colors"
-              >
+              <button onClick={cancelListening} className="p-2 rounded-full hover:bg-white/20 text-white transition-colors">
                   <X className="w-5 h-5" />
               </button>
-              <button 
-                onClick={toggleListening}
-                className="p-2 bg-white text-brand-600 rounded-full hover:bg-gray-100 transition-colors font-medium text-sm px-4"
-              >
+              <button onClick={toggleListening} className="p-2 bg-white text-brand-600 rounded-full hover:bg-gray-100 transition-colors font-medium text-sm px-4">
                   Done
               </button>
            </div>
         </div>
       )}
 
+      {/* Attachments Preview */}
+      {attachments.length > 0 && (
+          <div className="flex gap-2 mb-2 overflow-x-auto pb-2 px-1">
+              {attachments.map(att => (
+                  <div key={att.id} className="relative group bg-gray-100 dark:bg-gray-800 rounded-lg p-2 flex items-center gap-2 min-w-[120px] max-w-[200px] border border-gray-200 dark:border-gray-700">
+                      {att.type === 'image' ? (
+                          <img src={att.url} alt="preview" className="w-8 h-8 rounded object-cover" />
+                      ) : (
+                          <FileText className="w-8 h-8 text-gray-400 p-1" />
+                      )}
+                      <span className="text-xs truncate flex-1 dark:text-gray-200">{att.name}</span>
+                      <button 
+                        onClick={() => removeAttachment(att.id)}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                      >
+                          <X className="w-3 h-3" />
+                      </button>
+                  </div>
+              ))}
+          </div>
+      )}
+
       <div className="relative flex items-end w-full p-3 bg-white dark:bg-gray-700 rounded-xl shadow-lg border border-black/10 dark:border-gray-600 focus-within:ring-2 focus-within:ring-blue-500/50 transition-all">
         
+        <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            onChange={handleFileSelect}
+        />
+        
+        <button 
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2 mr-1 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+            title="Attach file"
+        >
+            <Paperclip className="w-5 h-5" />
+        </button>
+
         <textarea
           ref={textareaRef}
           value={text}
@@ -185,40 +233,27 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
         <div className="flex items-center gap-2 ml-2 pb-1">
             {isLoading ? (
-                 <button
-                 onClick={onStop}
-                 className="p-2 rounded-lg bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 transition-colors"
-                 title="Stop generating"
-               >
-                 <StopCircle className="w-5 h-5 animate-pulse" />
-               </button>
+                 <button onClick={onStop} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 transition-colors">
+                    <StopCircle className="w-5 h-5 animate-pulse" />
+                 </button>
             ) : isSpeaking ? (
-                <button
-                 onClick={onStopSpeaking}
-                 className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 animate-pulse"
-                 title="Stop Speaking"
-               >
-                 <span className="flex gap-0.5 items-end h-4">
-                    <span className="w-1 bg-current h-2 animate-[pulse_0.5s_ease-in-out_infinite]"></span>
-                    <span className="w-1 bg-current h-4 animate-[pulse_0.5s_ease-in-out_0.2s_infinite]"></span>
-                    <span className="w-1 bg-current h-3 animate-[pulse_0.5s_ease-in-out_0.4s_infinite]"></span>
-                 </span>
+                <button onClick={onStopSpeaking} className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 animate-pulse">
+                     <span className="flex gap-0.5 items-end h-4">
+                        <span className="w-1 bg-current h-2 animate-[pulse_0.5s_ease-in-out_infinite]"></span>
+                        <span className="w-1 bg-current h-4 animate-[pulse_0.5s_ease-in-out_0.2s_infinite]"></span>
+                        <span className="w-1 bg-current h-3 animate-[pulse_0.5s_ease-in-out_0.4s_infinite]"></span>
+                     </span>
                </button>
             ) : (
                 <>
-                    <button
-                        onClick={toggleListening}
-                        className={`p-2 rounded-lg transition-colors text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600`}
-                        title="Voice Input"
-                    >
+                    <button onClick={toggleListening} className="p-2 rounded-lg transition-colors text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600">
                         <Mic className="w-5 h-5" />
                     </button>
-                    
-                    <button
+                    <button 
                         onClick={() => handleSend('text')}
-                        disabled={!text.trim()}
+                        disabled={!text.trim() && attachments.length === 0}
                         className={`p-2 rounded-lg transition-colors ${
-                        text.trim() 
+                        text.trim() || attachments.length > 0
                             ? 'bg-brand-600 text-white hover:bg-brand-700 shadow-sm' 
                             : 'bg-transparent text-gray-300 dark:text-gray-600 cursor-not-allowed'
                         }`}
@@ -228,9 +263,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 </>
             )}
         </div>
-      </div>
-      <div className="text-center mt-2 text-xs text-gray-400 dark:text-gray-500">
-        A-Plex AI may display inaccurate info, including about people, so double-check its responses.
       </div>
     </div>
   );
