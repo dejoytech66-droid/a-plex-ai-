@@ -1,24 +1,24 @@
 import { GoogleGenAI } from "@google/genai";
 import { Message } from "../types";
 
-// Retrieve API Key safely. 
-// Checks process.env.API_KEY (injected by Vite config) first, then falls back to VITE_API_KEY standard.
-const getApiKey = () => {
-  let key = '';
-  // Try process.env (replaced by string literal during build via vite.config.ts)
-  try {
-    if (typeof process !== 'undefined' && process.env.API_KEY) {
-        key = process.env.API_KEY;
-    }
-  } catch (e) { /* ignore */ }
+// Declare the global constant defined in vite.config.ts
+declare global {
+  var __APP_GEMINI_KEY__: string | undefined;
+}
 
-  // Fallback to Vite standard import.meta.env
-  if (!key) {
-    try {
-        key = (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.VITE_API_KEY || '';
-    } catch (e) { /* ignore */ }
+// Retrieve API Key safely. 
+const getApiKey = () => {
+  // 1. Check the global constant injected by Vite (Works for Vercel/Production)
+  if (typeof __APP_GEMINI_KEY__ !== 'undefined' && __APP_GEMINI_KEY__) {
+    return __APP_GEMINI_KEY__;
   }
-  return key;
+
+  // 2. Fallback to standard Vite environment variables (Works for local .env files)
+  try {
+    return (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.VITE_API_KEY || '';
+  } catch (e) {
+    return '';
+  }
 };
 
 const API_KEY = getApiKey();
@@ -26,7 +26,7 @@ const API_KEY = getApiKey();
 // Initialize Gemini Client
 const getClient = () => {
     if (!API_KEY) {
-        throw new Error("API Key is missing. Please set GEMINI_API_KEY or API_KEY in your environment variables.");
+        throw new Error("API Key is missing. Please set GEMINI_API_KEY or API_KEY in your Vercel project settings.");
     }
     return new GoogleGenAI({ apiKey: API_KEY });
 };
