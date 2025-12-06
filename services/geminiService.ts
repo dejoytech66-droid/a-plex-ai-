@@ -1,39 +1,35 @@
 import { GoogleGenAI } from "@google/genai";
 import { Message } from "../types";
 
-// Declare the global constant defined in vite.config.ts
-declare global {
-  var __APP_GEMINI_KEY__: string | undefined;
-}
-
-// Retrieve API Key safely. 
-const getApiKey = () => {
-  // 1. Check the global constant injected by Vite (Works for Vercel/Production)
-  if (typeof __APP_GEMINI_KEY__ !== 'undefined' && __APP_GEMINI_KEY__) {
-    return __APP_GEMINI_KEY__;
-  }
-
-  // 2. Fallback to standard Vite environment variables (Works for local .env files)
-  try {
-    return (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.VITE_API_KEY || '';
-  } catch (e) {
-    return '';
-  }
-};
-
-const API_KEY = getApiKey();
-
-// Initialize Gemini Client
-const getClient = () => {
-    if (!API_KEY) {
-        throw new Error("API Key is missing. Please set GEMINI_API_KEY or API_KEY in your Vercel project settings.");
-    }
-    return new GoogleGenAI({ apiKey: API_KEY });
-};
-
 // Upgraded to Gemini 3 Pro for advanced coding and reasoning capabilities
 const MODEL_NAME = 'gemini-3-pro-preview';
 const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
+
+const STORAGE_KEY = 'aplex_user_api_key';
+
+export const getStoredKey = () => localStorage.getItem(STORAGE_KEY);
+export const setStoredKey = (key: string) => localStorage.setItem(STORAGE_KEY, key);
+export const removeStoredKey = () => localStorage.removeItem(STORAGE_KEY);
+
+// Helper to get client safely
+const getClient = () => {
+  // 1. Try Environment Variable (from Vite/Vercel)
+  let apiKey = process.env.API_KEY;
+
+  // 2. If Env var is missing or placeholder, try Local Storage (User entered)
+  if (!apiKey || apiKey === "YOUR_API_KEY_HERE" || apiKey.includes("API_KEY")) {
+      const userKey = getStoredKey();
+      if (userKey) {
+          apiKey = userKey;
+      }
+  }
+
+  if (!apiKey || apiKey === "YOUR_API_KEY_HERE") {
+    throw new Error("API_KEY_MISSING");
+  }
+  
+  return new GoogleGenAI({ apiKey });
+};
 
 /**
  * Maps internal Message type to Gemini Content type
@@ -53,15 +49,13 @@ const mapMessagesToContent = (messages: Message[]) => {
     }
 
     // Handle attachments (User uploads)
-    // Note: In a real implementation with `gemini-1.5-pro` or higher, we would send base64 data here.
-    // For this context, we'll serialize the attachment info as text context for the AI.
     if (msg.attachments && msg.attachments.length > 0) {
         msg.attachments.forEach(att => {
              parts.push({ text: `[Attachment: ${att.name} (${att.type})]` });
         });
     }
 
-    // Fallback if empty (e.g. only image, but we need text for some models if multimodal isn't fully set up in this mapping)
+    // Fallback if empty
     if (parts.length === 0) {
         parts.push({ text: "..." });
     }
@@ -111,26 +105,27 @@ export async function* streamGeminiResponse(
   newMessage: string,
   groupContext?: string
 ): AsyncGenerator<string, void, unknown> {
-  const client = getClient();
   
-  // Convert history
-  const historyContent = mapMessagesToContent(history);
-
-  // Prepend Group Context if available (e.g., "You are in a group chat named 'Developers' with Alice and Bob")
-  let systemInstructionWithContext = SYSTEM_INSTRUCTION;
-  if (groupContext) {
-      systemInstructionWithContext += `\n\nCURRENT CONTEXT:\n${groupContext}`;
-  }
-
-  const chat = client.chats.create({
-    model: MODEL_NAME,
-    history: historyContent,
-    config: {
-        systemInstruction: systemInstructionWithContext,
-    }
-  });
-
   try {
+    const ai = getClient();
+    
+    // Convert history
+    const historyContent = mapMessagesToContent(history);
+
+    // Prepend Group Context if available
+    let systemInstructionWithContext = SYSTEM_INSTRUCTION;
+    if (groupContext) {
+        systemInstructionWithContext += `\n\nCURRENT CONTEXT:\n${groupContext}`;
+    }
+
+    const chat = ai.chats.create({
+      model: MODEL_NAME,
+      history: historyContent,
+      config: {
+          systemInstruction: systemInstructionWithContext,
+      }
+    });
+
     const resultStream = await chat.sendMessageStream({ message: newMessage });
 
     for await (const chunk of resultStream) {
@@ -141,7 +136,13 @@ export async function* streamGeminiResponse(
     }
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    throw new Error(error.message || "Failed to generate response.");
+    if (error.message === "API_KEY_MISSING") {
+        yield "API_KEY_MISSING"; // Specific signal for UI to handle
+    } else if (error.message.includes("API key")) {
+         yield "⚠️ **Authentication Error**: The API Key is invalid. Please check your settings.";
+    } else {
+        yield "⚠️ **Error**: " + (error.message || "Failed to generate response.");
+    }
   }
 }
 
@@ -149,10 +150,9 @@ export async function* streamGeminiResponse(
  * Generate a title for the chat based on the first message
  */
 export async function generateChatTitle(firstMessage: string): Promise<string> {
-  if (!API_KEY) return "New Chat";
-  const client = getClient();
   try {
-    const response = await client.models.generateContent({
+    const ai = getClient();
+    const response = await ai.models.generateContent({
         model: MODEL_NAME,
         contents: `Generate a very short, concise title (max 4 words) for a chat that starts with: "${firstMessage}". Do not use quotes.`,
     });
@@ -166,9 +166,9 @@ export async function generateChatTitle(firstMessage: string): Promise<string> {
  * Generates an image based on a prompt using Nano banana model
  */
 export async function generateImage(prompt: string): Promise<string> {
-  const client = getClient();
   try {
-    const response = await client.models.generateContent({
+    const ai = getClient();
+    const response = await ai.models.generateContent({
       model: IMAGE_MODEL_NAME,
       contents: {
         parts: [
@@ -186,6 +186,9 @@ export async function generateImage(prompt: string): Promise<string> {
     throw new Error("No image generated.");
   } catch (error: any) {
     console.error("Image Gen Error:", error);
+    if (error.message === "API_KEY_MISSING") {
+        throw new Error("API Key is missing. Please set it in Settings.");
+    }
     throw new Error(error.message || "Failed to generate image.");
   }
 }

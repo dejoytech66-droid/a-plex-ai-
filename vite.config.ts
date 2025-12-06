@@ -5,17 +5,18 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
-  const env = loadEnv(mode, process.cwd(), '');
+  // We cast process to any to avoid TypeScript errors when @types/node is missing 'cwd' in the Process interface
+  const env = loadEnv(mode, (process as any).cwd(), '');
   
-  // Prioritize GEMINI_API_KEY, then API_KEY
-  const apiKey = env.GEMINI_API_KEY || env.API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  // Prioritize GEMINI_API_KEY, then VITE_GEMINI_API_KEY, then API_KEY
+  const apiKey = env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.API_KEY || '';
 
   return {
     plugins: [react()],
     define: {
       // Define a global constant that is replaced at build time.
       // This avoids reliance on 'process' which does not exist in the browser.
-      '__APP_GEMINI_KEY__': JSON.stringify(apiKey)
+      'process.env.API_KEY': JSON.stringify(apiKey)
     }
   };
 });

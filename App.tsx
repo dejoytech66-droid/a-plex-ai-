@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Menu, Loader2, Users } from 'lucide-react';
@@ -11,8 +10,9 @@ import { AuthPage } from './components/AuthPage';
 import { ProjectDashboard } from './components/ProjectDashboard';
 import { PrivacySettingsModal } from './components/PrivacySettingsModal';
 import { CreateGroupModal } from './components/CreateGroupModal';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { ChatSession, Message, Theme, Project, UserSettings, Attachment, GroupMetadata } from './types';
-import { streamGeminiResponse, generateChatTitle, generateImage } from './services/geminiService';
+import { streamGeminiResponse, generateChatTitle, generateImage, getStoredKey } from './services/geminiService';
 import { auth } from './services/firebase';
 
 const App: React.FC = () => {
@@ -30,6 +30,23 @@ const App: React.FC = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  
+  // API Key State
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+
+  // Check for key on mount
+  useEffect(() => {
+    // If no env key is likely present (checked via simple heuristic) and no stored key
+    // We can proactively show the modal, or wait for an error. 
+    // Let's check stored key.
+    const hasStored = !!getStoredKey();
+    const hasEnv = process.env.API_KEY && process.env.API_KEY !== 'YOUR_API_KEY_HERE';
+    if (!hasStored && !hasEnv) {
+        // We delay slightly to not jar the user immediately
+        const timer = setTimeout(() => setIsKeyModalOpen(true), 2000);
+        return () => clearTimeout(timer);
+    }
+  }, []);
   
   // Default Settings
   const [userSettings, setUserSettings] = useState<UserSettings>({
@@ -349,6 +366,9 @@ const App: React.FC = () => {
                 timestamp: Date.now()
             };
             addMessageToSession(currentSessionId, errorMsg);
+            if (error.message.includes("API Key is missing")) {
+                setIsKeyModalOpen(true);
+            }
         } finally {
             setIsLoading(false);
         }
@@ -389,6 +409,10 @@ const App: React.FC = () => {
         const stream = streamGeminiResponse(history, text, groupContext);
 
         for await (const chunk of stream) {
+            if (chunk === 'API_KEY_MISSING') {
+                setIsKeyModalOpen(true);
+                throw new Error("API Key Missing");
+            }
             fullResponse += chunk;
             updateLastMessage(currentSessionId, fullResponse);
         }
@@ -398,7 +422,12 @@ const App: React.FC = () => {
         }
 
     } catch (error: any) {
-        updateLastMessage(currentSessionId, "Error: " + error.message);
+        if (error.message !== "API Key Missing") {
+            updateLastMessage(currentSessionId, "Error: " + error.message);
+        } else {
+             updateLastMessage(currentSessionId, "Please enter your API Key to continue.");
+        }
+        
         setSessions(prev => prev.map(s => {
              if (s.id === currentSessionId) {
                  const msgs = [...s.messages];
@@ -477,6 +506,15 @@ const App: React.FC = () => {
         isOpen={isCreateGroupOpen}
         onClose={() => setIsCreateGroupOpen(false)}
         onCreate={handleCreateGroup}
+      />
+
+      <ApiKeyModal 
+        isOpen={isKeyModalOpen} 
+        onClose={() => setIsKeyModalOpen(false)}
+        onSuccess={() => {
+            // Re-render or just let the user try again
+            alert("API Key saved! Please try your request again.");
+        }}
       />
 
       {/* Sidebar */}
