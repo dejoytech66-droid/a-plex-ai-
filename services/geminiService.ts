@@ -1,11 +1,35 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { Message } from "../types";
 
-const API_KEY = process.env.API_KEY || '';
+// Retrieve API Key safely. 
+// Checks process.env.API_KEY (injected by Vite config) first, then falls back to VITE_API_KEY standard.
+const getApiKey = () => {
+  let key = '';
+  // Try process.env (replaced by string literal during build via vite.config.ts)
+  try {
+    if (typeof process !== 'undefined' && process.env.API_KEY) {
+        key = process.env.API_KEY;
+    }
+  } catch (e) { /* ignore */ }
+
+  // Fallback to Vite standard import.meta.env
+  if (!key) {
+    try {
+        key = (import.meta as any).env?.VITE_API_KEY || '';
+    } catch (e) { /* ignore */ }
+  }
+  return key;
+};
+
+const API_KEY = getApiKey();
 
 // Initialize Gemini Client
-const getClient = () => new GoogleGenAI({ apiKey: API_KEY });
+const getClient = () => {
+    if (!API_KEY) {
+        throw new Error("API Key is missing. Please set API_KEY in your environment variables.");
+    }
+    return new GoogleGenAI({ apiKey: API_KEY });
+};
 
 // Upgraded to Gemini 3 Pro for advanced coding and reasoning capabilities
 const MODEL_NAME = 'gemini-3-pro-preview';
